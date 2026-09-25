@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cyborg TryHackMe Walkthrough — Nmap, Borg, SSH & Privilege Escalation | Shivam Mavi</title>
+<meta name="description" content="Cyborg TryHackMe walkthrough covering Nmap enumeration, Gobuster, exposed Squid configuration, MD5-crypt password cracking, Borg archive extraction, SSH and Linux privilege escalation.">
+<meta name="author" content="Shivam Mavi"><meta name="robots" content="index,follow">
+<link rel="canonical" href="https://mavishivam4.github.io/tryhackme/cyborg/">
+<link rel="stylesheet" href="../../assets/style.css">
+<style>
+.article{max-width:850px;margin:0 auto;padding:65px 0 90px}.article h1{font-size:clamp(38px,6vw,60px);line-height:1.06;letter-spacing:-.035em;margin:0 0 18px}.article .intro{font-size:18px;color:#aeb8c4}.meta{color:#718091;font-size:13px;margin:20px 0 40px}.article h2{margin-top:58px;font-size:30px}.article h3{margin-top:35px;font-size:21px}.article p,.article li{color:#b9c2cc}.article strong{color:#e8edf3}.article img{width:100%;height:auto;border:1px solid #29333e;border-radius:10px;background:#070a0e;margin:18px 0 7px}.caption{text-align:center;font-size:12px!important;color:#718091!important}.terminal{background:#070a0e;border:1px solid #29333e;border-radius:9px;padding:16px 18px;overflow:auto;color:#d8e0e8;font:13px/1.6 "SFMono-Regular",Consolas,monospace;margin:16px 0}.toc{border:1px solid #29333e;background:#10161d;border-radius:12px;padding:20px 24px;margin:35px 0}.toc a{color:#8de0bd;text-decoration:none}.flag{border-left:3px solid #57d3a0;background:#10161d;padding:12px 16px;font-family:Consolas,monospace}.back{display:inline-block;margin:25px 0;color:#8de0bd;text-decoration:none}.warning{font-size:13px;color:#9da8b5;border-left:3px solid #596575;padding-left:13px}
+</style>
+</head>
+<body>
+<header class="site-header"><div class="wrap nav"><a class="brand" href="/">Shivam Mavi<span>.</span></a><nav><a href="/">Home</a><a href="https://github.com/mavishivam4">GitHub</a></nav></div></header>
+
+<main class="article">
+<a class="back" href="/">← Back to portfolio</a>
+<p class="eyebrow">TRYHACKME · CYBORG</p>
+<h1>Cyborg TryHackMe Walkthrough</h1>
+<p class="intro">My step-by-step notes for the Cyborg room. I cover the enumeration, web discovery, exposed Squid configuration, password cracking, Borg archive extraction, SSH access and the final Linux privilege escalation.</p>
+<p class="meta">Author: Shivam Mavi · Hands-on lab writeup · September 2026</p>
+
+<img src="images/room-overview.png" alt="TryHackMe Cyborg room overview">
+<p class="caption">TryHackMe Cyborg room.</p>
+
+<p class="warning">All testing described here was performed against the authorized TryHackMe lab environment.</p>
+
+<div class="toc"><strong>Contents</strong><ol>
+<li><a href="#recon">Reconnaissance</a></li><li><a href="#web">Web enumeration</a></li><li><a href="#admin">Investigating /admin/</a></li><li><a href="#squid">Finding the Squid hash</a></li><li><a href="#crack">Cracking the hash</a></li><li><a href="#borg">Extracting the Borg archive</a></li><li><a href="#ssh">Getting SSH access</a></li><li><a href="#user">User flag</a></li><li><a href="#privesc">Privilege escalation</a></li><li><a href="#root">Root flag</a></li><li><a href="#lessons">What I learned</a></li>
+</ol></div>
+
+<h2 id="recon">1. Starting with Enumeration</h2>
+<p>The first thing I normally do on a new machine is check what is actually exposed. I started with an Nmap scan against the target.</p>
+<div class="terminal">nmap -vvv 10.49.160.153</div>
+<img src="images/nmap.png" alt="Nmap scan showing SSH and HTTP open">
+<p class="caption">Nmap shows 22/tcp (SSH) and 80/tcp (HTTP) open.</p>
+<p>That gave me a pretty clear starting point: SSH was available, but the web server was the obvious place to do more enumeration first.</p>
+
+<h2 id="web">2. Checking the Web Server</h2>
+<p>I opened the target IP in the browser and got the default Apache page. There wasn't anything useful on the page itself, so I moved on to directory enumeration.</p>
+<img src="images/apache.png" alt="Apache2 default page">
+<p class="caption">Default Apache page.</p>
+
+<h3>Directory brute-forcing</h3>
+<div class="terminal">gobuster dir -u http://10.49.160.153/ -w /usr/share/wordlists/dirb/common.txt</div>
+<img src="images/gobuster.png" alt="Gobuster directory enumeration results">
+<p class="caption">Gobuster discovers interesting directories including /admin/ and /etc/.</p>
+<p>The two paths that stood out were <strong>/admin/</strong> and <strong>/etc/</strong>. I checked the admin area first.</p>
+
+<h2 id="admin">3. Looking Around /admin/</h2>
+<img src="images/admin.png" alt="Cyborg admin page">
+<p class="caption">The Cyborg admin page.</p>
+<p>The site looks like a small music-themed application. I checked the available sections instead of assuming there was an obvious exploit immediately.</p>
+<img src="images/shoutbox.png" alt="Cyborg admin shoutbox">
+<p class="caption">The shoutbox gives useful clues about the Squid configuration and music_archive backup.</p>
+<p>The shoutbox was the first really useful clue. It mentioned a Squid proxy configuration and a backup called <strong>music_archive</strong>. That gave me two things to investigate: the exposed configuration files and the backup.</p>
+
+<h2 id="squid">4. Finding the Squid Hash</h2>
+<p>Since Gobuster had found <strong>/etc/</strong>, I opened it and went into <strong>/etc/squid/</strong>.</p>
+<img src="images/squid-directory.png" alt="Exposed Squid directory">
+<p class="caption">Exposed /etc/squid/ directory.</p>
+<p>The directory contained <strong>passwd</strong> and <strong>squid.conf</strong>. The passwd file was particularly interesting because it exposed a password hash.</p>
+<img src="images/hash.png" alt="Exposed password hash">
+<p class="caption">The exposed MD5-crypt style password hash.</p>
+
+<h2 id="crack">5. Cracking the Hash</h2>
+<p>I saved the hash into a file called <strong>borg.hash</strong> and used John the Ripper with the RockYou wordlist.</p>
+<div class="terminal">john borg.hash --wordlist=/usr/share/wordlists/rockyou.txt</div>
+<img src="images/john.png" alt="John the Ripper recovering the password">
+<p class="caption">John recovers the password.</p>
+<p>The recovered password was:</p>
+<div class="terminal">squidward</div>
+<p>The password was a useful clue rather than an automatic SSH login. I went back to the archive mentioned on the admin page and tried it as the Borg passphrase.</p>
+
+<h2 id="borg">6. Extracting the Borg Backup</h2>
+<div class="terminal">borg extract /home/field/dev/final_archive::music_archive</div>
+<p>When Borg asked for the passphrase, I entered:</p>
+<div class="terminal">squidward</div>
+<img src="images/borg.png" alt="Borg archive extraction">
+<p class="caption">Borg extraction and inspection of the restored files.</p>
+<p>After extraction I checked the restored home directory. There were normal folders such as Desktop, Documents and Music. I started checking the text files because they were more likely to contain useful information.</p>
+
+<h2 id="ssh">7. Getting SSH Access</h2>
+<p>The Documents directory contained <strong>note.txt</strong>. Reading it gave me credentials for Alex:</p>
+<div class="terminal">cat note.txt</div>
+<div class="terminal">alex:S3cr3tP0s3</div>
+<img src="images/ssh.png" alt="SSH login as alex">
+<p class="caption">SSH login using the recovered credentials.</p>
+<p>Since port 22 was open from the initial scan, I used the credentials to connect:</p>
+<div class="terminal">ssh alex@10.49.160.153</div>
+
+<h2 id="user">8. Getting user.txt</h2>
+<p>Once logged in, I checked the home directory and found the user flag.</p>
+<div class="terminal">ls
+cat user.txt</div>
+<img src="images/user-flag.png" alt="User flag">
+<p class="caption">Reading user.txt.</p>
+<p>User flag:</p>
+<div class="flag">flag{1_hop3_y0u_k3p_th3_arch1v3s_saf3}</div>
+
+<h2 id="privesc">9. Looking for a Way to Become Root</h2>
+<p>With the user flag done, I moved on to privilege escalation. My first check was sudo:</p>
+<div class="terminal">sudo -l</div>
+<img src="images/sudo.png" alt="sudo permissions and backup script">
+<p class="caption">sudo permission and inspection of backup.sh.</p>
+<p>The interesting part was that Alex could run <strong>/etc/mp3backups/backup.sh</strong> as root without a password. The script was also writable by Alex. That combination is the key issue here: a root-executed script should not be modifiable by the unprivileged user who is allowed to execute it.</p>
+
+<h2>10. Modifying backup.sh</h2>
+<p>For this lab, I replaced the script with a Bash shell that preserves the privileged effective UID:</p>
+<div class="terminal">echo "/bin/bash -p" &gt; /etc/mp3backups/backup.sh</div>
+<p>I checked the contents afterwards:</p>
+<div class="terminal">cat /etc/mp3backups/backup.sh</div>
+<img src="images/modified-script.png" alt="Modified backup script">
+<p class="caption">The backup script after modification.</p>
+
+<h2>11. Running the Script as Root</h2>
+<p>Because sudo allowed me to execute the script as root, I ran it:</p>
+<div class="terminal">sudo /etc/mp3backups/backup.sh</div>
+<p>Then I checked the current user:</p>
+<div class="terminal">whoami</div>
+<img src="images/root-shell.png" alt="Root shell">
+<p class="caption">The script gives a root shell.</p>
+
+<h2 id="root">12. Getting root.txt</h2>
+<p>Finally, I moved into <strong>/root</strong> and read the root flag.</p>
+<div class="terminal">cd /root
+ls
+cat root.txt</div>
+<img src="images/root-flag.png" alt="Root flag">
+<p class="caption">Reading root.txt from the root account.</p>
+<p>Root flag:</p>
+<div class="flag">flag{Than5_for_play1ng_H0pf_y0u_enJ053d}</div>
+
+<h2 id="lessons">13. What I Learned</h2>
+<ul>
+<li>Don't stop at the default web page. Directory enumeration can reveal completely different parts of an application.</li>
+<li>Exposed configuration files can contain hashes, usernames and useful paths.</li>
+<li>A password recovered from one part of a lab can become useful when another clue points to the same backup or service.</li>
+<li>When I extract a backup, I should inspect restored text files for credentials and other useful information.</li>
+<li>After getting a normal user shell, <strong>sudo -l</strong> is one of the first privilege-escalation checks I should make.</li>
+<li>A root-run script that is writable by the current user can lead to arbitrary command execution as root.</li>
+</ul>
+
+<h2>14. Quick Command List</h2>
+<div class="terminal">nmap -vvv 10.49.160.153
+
+gobuster dir -u http://10.49.160.153/ -w /usr/share/wordlists/dirb/common.txt
+
+john borg.hash --wordlist=/usr/share/wordlists/rockyou.txt
+
+borg extract /home/field/dev/final_archive::music_archive
+
+ssh alex@10.49.160.153
+
+sudo -l
+
+echo "/bin/bash -p" &gt; /etc/mp3backups/backup.sh
+
+sudo /etc/mp3backups/backup.sh
+
+whoami</div>
+
+<p class="warning">This walkthrough documents an authorized TryHackMe lab. The techniques should only be used against systems you are permitted to test.</p>
+</main>
+<footer><div class="wrap">© 2026 Shivam Mavi · <a href="https://github.com/mavishivam4" style="color:#8de0bd">GitHub</a></div></footer>
+</body>
+</html>
