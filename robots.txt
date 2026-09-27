@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://mavishivam4.github.io/sitemap.xml
